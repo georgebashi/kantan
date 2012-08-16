@@ -11,7 +11,7 @@ import (
 
 func projRepoHandler(w http.ResponseWriter, req *http.Request, derp_root string) {
 	vars := mux.Vars(req)
-	projectPath := fmt.Sprintf("%s/%s", derp_root, vars["project"])
+	projectPath := fmt.Sprintf("%s/projects/%s", derp_root, vars["project"])
 	git := &cgi.Handler{
 		Path: "/usr/local/Cellar/git/1.7.11.2/libexec/git-core/git-http-backend",
 		Env: []string{
