@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"code.google.com/p/gorilla/mux"
 	"fmt"
 	"net/http"
@@ -9,11 +10,33 @@ import (
 	"os/exec"
 )
 
+type writerWrapper struct {
+	w http.ResponseWriter
+}
+
+func (wrapper *writerWrapper) Header() http.Header {
+	return wrapper.w.Header()
+}
+
+func (wrapper *writerWrapper) Write(data []byte) (int, error) {
+	if bytes.Equal(data, []byte("0000")) {
+		fmt.Println("IGNORE")
+		return 4, nil
+	}
+	return wrapper.w.Write(data)
+}
+
+func (wrapper *writerWrapper) WriteHeader(status int) {
+	fmt.Println("WRITEHEADER")
+	wrapper.w.WriteHeader(status)
+}
+
 func projRepoHandler(w http.ResponseWriter, req *http.Request, derp_root string) {
 	vars := mux.Vars(req)
+	fmt.Println(req.RequestURI)
 	projectPath := fmt.Sprintf("%s/projects/%s", derp_root, vars["project"])
 	git := &cgi.Handler{
-		Path: "/usr/local/Cellar/git/1.7.11.2/libexec/git-core/git-http-backend",
+		Path: "/usr/local/Cellar/git/1.7.11.5/libexec/git-core/git-http-backend",
 		Env: []string{
 			fmt.Sprintf("GIT_PROJECT_ROOT=%s", projectPath),
 			"GIT_HTTP_EXPORT_ALL=true",
@@ -45,6 +68,34 @@ func projRepoHandler(w http.ResponseWriter, req *http.Request, derp_root string)
 	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", vars["project"]), git).ServeHTTP(w, req)
 }
 
+func projRepoReceivePackHandler(w http.ResponseWriter, req *http.Request, derp_root string) {
+	vars := mux.Vars(req)
+	fmt.Println("RECEIVE PACK")
+	projectPath := fmt.Sprintf("%s/projects/%s", derp_root, vars["project"])
+	git := &cgi.Handler{
+		Path: "/usr/local/Cellar/git/1.7.11.5/libexec/git-core/git-http-backend",
+		Env: []string{
+			fmt.Sprintf("GIT_PROJECT_ROOT=%s", projectPath),
+			"GIT_HTTP_EXPORT_ALL=true",
+		},
+	}
+	wrapper := &writerWrapper{w: w}
+	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", vars["project"]), git).ServeHTTP(wrapper, req)
+	printf(w, "herp a derp")
+	fmt.Fprintln(w, "0000")
+}
+
+func printf(w http.ResponseWriter, format string, args ...interface{}) {
+	fmt.Fprintln(w, pktFmt(fmt.Sprintf(format, args...)))
+	if ok := w.(http.Flusher); ok != nil {
+		ok.Flush()
+	}
+}
+
+func pktFmt(msg string) (out string) {
+	return fmt.Sprintf("%04x\x02%s", len(msg)+6, msg)
+}
+
 func git_exec(dir string, args ...string) (err error) {
 	cmd := exec.Command("/usr/local/bin/git", args...)
 	cmd.Dir = dir
@@ -58,6 +109,7 @@ func main() {
 	}
 	r := mux.NewRouter()
 
+	r.Path("/proj/{project}/repo/git-receive-pack").HandlerFunc(func(w http.ResponseWriter, req *http.Request) { projRepoReceivePackHandler(w, req, derp_root) })
 	r.PathPrefix("/proj/{project}/repo").HandlerFunc(func(w http.ResponseWriter, req *http.Request) { projRepoHandler(w, req, derp_root) })
 
 	http.ListenAndServe(":9090", r)
