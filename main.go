@@ -14,7 +14,7 @@ type globalContext struct {
 type requestContext struct {
 	globalContext
 	vars map[string]string
-	projectPath string
+	repoPath string
 }
 
 type requestHandler struct {
@@ -29,7 +29,7 @@ func (handler *requestHandler) ServeHTTP(w http.ResponseWriter, req *http.Reques
 			derp_root: handler.globalContext.derp_root,
 		},
 		vars: vars,
-		projectPath: fmt.Sprintf("%s/projects/%s", handler.globalContext.derp_root, vars["project"]),
+		repoPath: fmt.Sprintf("%s/projects/%s/repo", handler.globalContext.derp_root, vars["project"]),
 	}
 	handler.f(rCtx, w, req)
 }

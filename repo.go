@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"launchpad.net/goyaml"
 	"log"
 	"net/http"
@@ -15,20 +14,20 @@ import (
 	"regexp"
 )
 
-func createGitHandler(projectPath string) *cgi.Handler {
+func createGitHandler(repoPath string) *cgi.Handler {
 	return &cgi.Handler{
 		Path: "/usr/local/Cellar/git/1.7.11.5/libexec/git-core/git-http-backend",
 		Env: []string{
-			fmt.Sprintf("GIT_PROJECT_ROOT=%s", projectPath),
+			fmt.Sprintf("GIT_PROJECT_ROOT=%s", repoPath),
 			"GIT_HTTP_EXPORT_ALL=true",
 		},
 	}
 }
 
-func git_exec(dir string, args ...string) (err error) {
+func git_exec(dir string, args ...string) (out []byte, err error) {
 	cmd := exec.Command("/usr/local/bin/git", args...)
 	cmd.Dir = dir
-	return cmd.Run()
+	return cmd.Output()
 }
 
 func exists(path string) (bool, error) {
@@ -44,32 +43,28 @@ func exists(path string) (bool, error) {
 }
 
 func (ctx requestContext) projRepoHandler(w http.ResponseWriter, req *http.Request) {
-	git := createGitHandler(ctx.projectPath)
+	git := createGitHandler(ctx.repoPath)
 
-	// test if projectPath exists
-	exists, err := exists(ctx.projectPath)
+	// test if repo exists
+	exists, err := exists(ctx.repoPath)
 	if err != nil {
-		http.Error(w, "Couldn't read project dir", http.StatusInternalServerError)
+		http.Error(w, "Couldn't read project repo dir", http.StatusInternalServerError)
 		return
 	}
 
 	if !exists {
-		err := os.MkdirAll(ctx.projectPath, 0770)
+		err := os.MkdirAll(ctx.repoPath, 0770)
 		if err != nil {
-			http.Error(w, "Couldn't create project dir", http.StatusInternalServerError)
+			http.Error(w, "Couldn't create project repo dir", http.StatusInternalServerError)
 			return
 		}
 
-		if git_exec(ctx.projectPath, "init") != nil {
+		if _, err = git_exec(ctx.repoPath, "init", "--bare"); err != nil {
 			http.Error(w, "Couldn't init project repo", http.StatusInternalServerError)
 			return
 		}
-		if git_exec(ctx.projectPath, "config", "http.receivepack", "true") != nil {
+		if _, err = git_exec(ctx.repoPath, "config", "http.receivepack", "true"); err != nil {
 			http.Error(w, "Couldn't configure http.receivepack on project repo", http.StatusInternalServerError)
-			return
-		}
-		if git_exec(ctx.projectPath, "config", "receive.denyCurrentBranch", "ignore") != nil {
-			http.Error(w, "Couldn't configure receive.denyCurrentBranch on project repo", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -129,7 +124,7 @@ func urlToDir(url *url.URL) (string, error) {
 }
 
 func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req *http.Request) {
-	git := createGitHandler(ctx.projectPath)
+	git := createGitHandler(ctx.repoPath)
 
 	wrapper := &writerWrapper{w}
 	http.StripPrefix(fmt.Sprintf("/projects/%s/repo", ctx.vars["project"]), git).ServeHTTP(wrapper, req)
@@ -140,10 +135,8 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 	minor := newHerokuStyleLogger(gow, false)
 	major.Println("Derploy receiving push")
 
-	minor.Println("Updating working copy")
-	git_exec(ctx.projectPath, "reset", "--hard", "HEAD")
-
-	yml, err := ioutil.ReadFile(fmt.Sprintf("%s/.derploy.yml", ctx.projectPath))
+	// git cat-file blob master:.derploy.yml
+	yml, err := git_exec(ctx.repoPath, "cat-file", "blob", "master:.derploy.yml")
 	if err != nil {
 		major.Println("Couldn't read derploy config")
 		minor.Println("Create .derploy.yml in the repository, containing \"buildpack: git@uri:for/buildpack\"")
@@ -180,7 +173,7 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 	if !exists {
 		major.Printf("Fetching buildpack \"%s\" from %s", bpDir, c.Buildpack)
 		err = os.MkdirAll(buildpackPath, 0770)
-		if git_exec(buildpackPath, "clone", c.Buildpack, buildpackPath) != nil {
+		if _, err = git_exec(buildpackPath, "clone", c.Buildpack, buildpackPath); err != nil {
 			major.Printf("Couldn't clone buildpack %s into %s", c.Buildpack, buildpackPath)
 			return
 		}
@@ -194,9 +187,6 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 		major.Println("Couldn't create cache dir")
 		return
 	}
-
-	major.Println("Cleaning up")
-	git_exec(ctx.projectPath, "clean", "-fd")
 
 }
 
