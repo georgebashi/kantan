@@ -43,8 +43,8 @@ func main() {
 
 	ctx := globalContext{derp_root}
 
-	r.Path("/proj/{project}/repo/git-receive-pack").Handler(&requestHandler{ctx, requestContext.projRepoReceivePackHandler})
-	r.PathPrefix("/proj/{project}/repo").Handler(&requestHandler{ctx, requestContext.projRepoHandler})
+	r.Path("/projects/{project}/repo/git-receive-pack").Handler(&requestHandler{ctx, requestContext.projRepoReceivePackHandler})
+	r.PathPrefix("/projects/{project}/repo").Handler(&requestHandler{ctx, requestContext.projRepoHandler})
 
 	http.ListenAndServe(":9090", r)
 }

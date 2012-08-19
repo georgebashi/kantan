@@ -73,7 +73,7 @@ func (ctx requestContext) projRepoHandler(w http.ResponseWriter, req *http.Reque
 		}
 	}
 
-	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", ctx.vars["project"]), git).ServeHTTP(w, req)
+	http.StripPrefix(fmt.Sprintf("/projects/%s/repo", ctx.vars["project"]), git).ServeHTTP(w, req)
 }
 
 type writerWrapper struct {
@@ -131,7 +131,7 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 	git := createGitHandler(ctx.projectPath)
 
 	wrapper := &writerWrapper{w}
-	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", ctx.vars["project"]), git).ServeHTTP(wrapper, req)
+	http.StripPrefix(fmt.Sprintf("/projects/%s/repo", ctx.vars["project"]), git).ServeHTTP(wrapper, req)
 	defer fmt.Fprintln(w, "0000")
 
 	gow := &GitOutputWriter{w}
