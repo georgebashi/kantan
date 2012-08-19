@@ -3,23 +3,12 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/cgi"
 	"os"
 	"os/exec"
 )
-
-
-type writerWrapper struct {
-	http.ResponseWriter
-}
-
-func (wrapper *writerWrapper) Write(data []byte) (int, error) {
-	if bytes.Equal(data, []byte("0000")) {
-		return 4, nil
-	}
-	return wrapper.ResponseWriter.Write(data)
-}
 
 func createGitHandler(projectPath string) *cgi.Handler {
 	return &cgi.Handler{
@@ -30,6 +19,13 @@ func createGitHandler(projectPath string) *cgi.Handler {
 		},
 	}
 }
+
+func git_exec(dir string, args ...string) (err error) {
+	cmd := exec.Command("/usr/local/bin/git", args...)
+	cmd.Dir = dir
+	return cmd.Run()
+}
+
 
 func (ctx requestContext) projRepoHandler(w http.ResponseWriter, req *http.Request) {
 	git := createGitHandler(ctx.projectPath)
@@ -60,29 +56,45 @@ func (ctx requestContext) projRepoHandler(w http.ResponseWriter, req *http.Reque
 	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", ctx.vars["project"]), git).ServeHTTP(w, req)
 }
 
+type writerWrapper struct {
+	http.ResponseWriter
+}
+
+func (wrapper *writerWrapper) Write(data []byte) (int, error) {
+	if bytes.Equal(data, []byte("0000")) {
+		return 4, nil
+	}
+	return wrapper.ResponseWriter.Write(data)
+}
+
+type GitOutputWriter struct {
+	w http.ResponseWriter
+}
+
+func (gow *GitOutputWriter) Write(p []byte) (n int, err error) {
+	fmt.Fprintf(gow.w, "%04x\x02%s", len(p)+5, p)
+	if ok := gow.w.(http.Flusher); ok != nil {
+		ok.Flush()
+	}
+	return len(p), nil
+}
+
+func newHerokuStyleLogger(gow *GitOutputWriter, major bool) *log.Logger {
+	prefix := "       "
+	if major {
+		prefix = "-----> "
+	}
+	return log.New(gow, prefix, 0)
+}
+
 func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req *http.Request) {
 	git := createGitHandler(ctx.projectPath)
 
 	wrapper := &writerWrapper{w}
 	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", ctx.vars["project"]), git).ServeHTTP(wrapper, req)
-	printf(w, "herp a derp")
+	gow := &GitOutputWriter{w}
+	major := newHerokuStyleLogger(gow, true)
+	major.Println("derploy receiving push")
 	fmt.Fprintln(w, "0000")
-}
-
-func printf(w http.ResponseWriter, format string, args ...interface{}) {
-	fmt.Fprintln(w, pktFmt(fmt.Sprintf(format, args...)))
-	if ok := w.(http.Flusher); ok != nil {
-		ok.Flush()
-	}
-}
-
-func pktFmt(msg string) (out string) {
-	return fmt.Sprintf("%04x\x02%s", len(msg)+6, msg)
-}
-
-func git_exec(dir string, args ...string) (err error) {
-	cmd := exec.Command("/usr/local/bin/git", args...)
-	cmd.Dir = dir
-	return cmd.Run()
 }
 
