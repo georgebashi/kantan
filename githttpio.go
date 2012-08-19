@@ -8,15 +8,19 @@ import (
 	"log"
 	"net/http"
 	"net/http/cgi"
+	"os/exec"
 )
 
 func CreateGitHandler(repoPath string) *cgi.Handler {
+	cmd, err := exec.LookPath("git")
+	if err != nil {
+		panic("Couldn't find git!")
+	}
+
 	return &cgi.Handler{
-		Path: "/usr/local/Cellar/git/1.7.11.5/libexec/git-core/git-http-backend",
-		Env: []string{
-			fmt.Sprintf("GIT_PROJECT_ROOT=%s", repoPath),
-			"GIT_HTTP_EXPORT_ALL=true",
-		},
+		Path: cmd,
+		Args: []string{"http-backend"},
+		Env:  []string{fmt.Sprintf("GIT_PROJECT_ROOT=%s", repoPath), "GIT_HTTP_EXPORT_ALL=true"},
 	}
 }
 
@@ -66,4 +70,3 @@ func PipeToGitWriter(rc io.Reader, gow GitOutputWriter) {
 		gow.Write(line)
 	}
 }
-

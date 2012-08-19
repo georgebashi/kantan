@@ -12,7 +12,8 @@ import (
 )
 
 func git_exec(dir string, args ...string) (out []byte, err error) {
-	cmd := exec.Command("/usr/local/bin/git", args...)
+	path, _ := exec.LookPath("git")
+	cmd := exec.Command(path, args...)
 	cmd.Dir = dir
 	return cmd.Output()
 }
