@@ -33,13 +33,14 @@ func git_exec(dir string, args ...string) (err error) {
 
 func exists(path string) (bool, error) {
 	_, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
+	if err == nil {
+		return true, nil
 	}
-	return true, nil
+
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (ctx requestContext) projRepoHandler(w http.ResponseWriter, req *http.Request) {
