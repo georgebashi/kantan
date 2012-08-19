@@ -2,12 +2,17 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/ioutil"
+	"launchpad.net/goyaml"
 	"log"
 	"net/http"
 	"net/http/cgi"
+	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 )
 
 func createGitHandler(projectPath string) *cgi.Handler {
@@ -26,33 +31,48 @@ func git_exec(dir string, args ...string) (err error) {
 	return cmd.Run()
 }
 
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
 
 func (ctx requestContext) projRepoHandler(w http.ResponseWriter, req *http.Request) {
 	git := createGitHandler(ctx.projectPath)
 
 	// test if projectPath exists
-	if _, err := os.Stat(ctx.projectPath); err != nil {
-		if os.IsNotExist(err) {
-			// it doesn't, create it
-			os.MkdirAll(ctx.projectPath, 0770)
-			if git_exec(ctx.projectPath, "init") != nil {
-				http.Error(w, "Couldn't init project repo", http.StatusInternalServerError)
-				return
-			}
-			if git_exec(ctx.projectPath, "config", "http.receivepack", "true") != nil {
-				http.Error(w, "Couldn't configure http.receivepack on project repo", http.StatusInternalServerError)
-				return
-			}
-			if git_exec(ctx.projectPath, "config", "receive.denyCurrentBranch", "ignore") != nil {
-				http.Error(w, "Couldn't configure receive.denyCurrentBranch on project repo", http.StatusInternalServerError)
-				return
-			}
-		} else {
-			// other error
-			http.Error(w, "Project path was not readable", http.StatusInternalServerError)
+	exists, err := exists(ctx.projectPath)
+	if err != nil {
+		http.Error(w, "Couldn't read project dir", http.StatusInternalServerError)
+		return
+	}
+
+	if !exists {
+		err := os.MkdirAll(ctx.projectPath, 0770)
+		if err != nil {
+			http.Error(w, "Couldn't create project dir", http.StatusInternalServerError)
+			return
+		}
+
+		if git_exec(ctx.projectPath, "init") != nil {
+			http.Error(w, "Couldn't init project repo", http.StatusInternalServerError)
+			return
+		}
+		if git_exec(ctx.projectPath, "config", "http.receivepack", "true") != nil {
+			http.Error(w, "Couldn't configure http.receivepack on project repo", http.StatusInternalServerError)
+			return
+		}
+		if git_exec(ctx.projectPath, "config", "receive.denyCurrentBranch", "ignore") != nil {
+			http.Error(w, "Couldn't configure receive.denyCurrentBranch on project repo", http.StatusInternalServerError)
 			return
 		}
 	}
+
 	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", ctx.vars["project"]), git).ServeHTTP(w, req)
 }
 
@@ -87,14 +107,88 @@ func newHerokuStyleLogger(gow *GitOutputWriter, major bool) *log.Logger {
 	return log.New(gow, prefix, 0)
 }
 
+type config struct {
+	Buildpack string
+}
+
+func gitURL(path string) (*url.URL, error) {
+	rx := regexp.MustCompile("([\\-\\.\\w]+)@([\\-\\.\\w]+):([\\-\\.\\w]+)")
+	if parts := rx.FindStringSubmatch(path); parts != nil {
+		path = fmt.Sprintf("ssh://%s@%s/%s", parts[1], parts[2], parts[3])
+	}
+	return url.Parse(path)
+}
+
+func urlToDir(url *url.URL) (string, error) {
+	rx := regexp.MustCompile(".*/([\\-\\.\\w]+?)(.git)?$")
+	if parts := rx.FindStringSubmatch(url.RequestURI()); parts != nil {
+		return parts[1], nil
+	}
+	return "", errors.New("Couldn't parse repository name from URL")
+}
+
 func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req *http.Request) {
 	git := createGitHandler(ctx.projectPath)
 
 	wrapper := &writerWrapper{w}
 	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", ctx.vars["project"]), git).ServeHTTP(wrapper, req)
+	defer fmt.Fprintln(w, "0000")
+
 	gow := &GitOutputWriter{w}
 	major := newHerokuStyleLogger(gow, true)
-	major.Println("derploy receiving push")
-	fmt.Fprintln(w, "0000")
+	minor := newHerokuStyleLogger(gow, false)
+	major.Println("Derploy receiving push")
+
+	minor.Println("Updating working copy")
+	git_exec(ctx.projectPath, "reset", "--hard", "HEAD")
+
+	yml, err := ioutil.ReadFile(fmt.Sprintf("%s/.derploy.yml", ctx.projectPath))
+	if err != nil {
+		major.Println("Couldn't read derploy config")
+		minor.Println("Create .derploy.yml in the repository, containing \"buildpack: git@uri:for/buildpack\"")
+		return
+	}
+
+	c := config{}
+	err = goyaml.Unmarshal(yml, &c)
+	if err != nil {
+		major.Println("Couldn't parse deploy config")
+		return
+	}
+
+	bpUrl, err := gitURL(c.Buildpack)
+	if err != nil {
+		major.Println("Couldn't parse buildpack URL")
+		return
+	}
+
+	bpDir, err := urlToDir(bpUrl)
+	if err != nil {
+		major.Println(err)
+		return
+	}
+
+	buildpackPath := fmt.Sprintf("%s/buildpacks/%s", ctx.globalContext.derp_root, bpDir)
+
+	exists, err := exists(buildpackPath)
+	if err != nil {
+		major.Printf("Couldn't read buildpack dir (%s)", buildpackPath)
+		return
+	}
+
+	if !exists {
+		major.Printf("Fetching buildpack \"%s\" from %s", bpDir, c.Buildpack)
+		err = os.MkdirAll(buildpackPath, 0770)
+		if git_exec(buildpackPath, "clone", c.Buildpack, buildpackPath) != nil {
+			major.Printf("Couldn't clone buildpack %s into %s", c.Buildpack, buildpackPath)
+			return
+		}
+	} else {
+		major.Printf("Using existing buildpack \"%s\"", bpDir)
+	}
+
+	major.Println("Cleaning up")
+	git_exec(ctx.projectPath, "clean", "-fd")
+
 }
 
