@@ -15,6 +15,7 @@ type requestContext struct {
 	globalContext
 	vars map[string]string
 	repoPath string
+	cachePath string
 }
 
 type requestHandler struct {
@@ -24,12 +25,14 @@ type requestHandler struct {
 
 func (handler *requestHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	vars := mux.Vars(req)
+	projectDir := fmt.Sprintf("%s/projects/%s", handler.globalContext.derp_root, vars["project"])
 	rCtx := requestContext{
 		globalContext: globalContext{
 			derp_root: handler.globalContext.derp_root,
 		},
 		vars: vars,
-		repoPath: fmt.Sprintf("%s/projects/%s/repo", handler.globalContext.derp_root, vars["project"]),
+		repoPath: fmt.Sprintf("%s/repo", projectDir),
+		cachePath: fmt.Sprintf("%s/cache", projectDir),
 	}
 	handler.f(rCtx, w, req)
 }

@@ -177,13 +177,16 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 			major.Printf("Couldn't clone buildpack %s into %s", c.Buildpack, buildpackPath)
 			return
 		}
+		minor.Println("Cleaning buildpack cache")
+		if os.RemoveAll(ctx.cachePath) != nil {
+			minor.Printf("Couldn't remove old cache, leaving in place")
+		}
 	} else {
 		major.Printf("Using existing buildpack \"%s\"", bpDir)
 		git_exec(buildpackPath, "clean", "-fd")
 	}
 
-	cacheDir := fmt.Sprintf("%s/cache/%s/%s", ctx.globalContext.derp_root, bpDir, ctx.vars["project"])
-	if os.MkdirAll(cacheDir, 0770) != nil {
+	if os.MkdirAll(ctx.cachePath, 0770) != nil {
 		major.Println("Couldn't create cache dir")
 		return
 	}
