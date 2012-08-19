@@ -13,8 +13,8 @@ type globalContext struct {
 
 type requestContext struct {
 	globalContext
-	vars map[string]string
-	repoPath string
+	vars      map[string]string
+	repoPath  string
 	cachePath string
 }
 
@@ -30,8 +30,8 @@ func (handler *requestHandler) ServeHTTP(w http.ResponseWriter, req *http.Reques
 		globalContext: globalContext{
 			derp_root: handler.globalContext.derp_root,
 		},
-		vars: vars,
-		repoPath: fmt.Sprintf("%s/repo", projectDir),
+		vars:      vars,
+		repoPath:  fmt.Sprintf("%s/repo", projectDir),
 		cachePath: fmt.Sprintf("%s/cache", projectDir),
 	}
 	handler.f(rCtx, w, req)

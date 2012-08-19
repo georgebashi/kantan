@@ -135,7 +135,6 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 	minor := newHerokuStyleLogger(gow, false)
 	major.Println("Derploy receiving push")
 
-	// git cat-file blob master:.derploy.yml
 	yml, err := git_exec(ctx.repoPath, "cat-file", "blob", "master:.derploy.yml")
 	if err != nil {
 		major.Println("Couldn't read derploy config")
@@ -192,4 +191,3 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 	}
 
 }
-
