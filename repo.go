@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"launchpad.net/goyaml"
 	"log"
 	"net/http"
@@ -124,6 +126,22 @@ func urlToDir(url *url.URL) (string, error) {
 	return "", errors.New("Couldn't parse repository name from URL")
 }
 
+func readToGitWriter(rc io.ReadCloser, gow GitOutputWriter) {
+	br := bufio.NewReader(rc)
+	for {
+		line, isPrefix, err := br.ReadLine()
+		if err != nil {
+			return
+		}
+
+		if !isPrefix {
+			line = append(line, "\n"...)
+		}
+
+		gow.Write(line)
+	}
+}
+
 func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req *http.Request) {
 	git := createGitHandler(ctx.repoPath)
 
@@ -182,7 +200,7 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 			minor.Printf("Couldn't remove old cache, leaving in place")
 		}
 	} else {
-		major.Printf("Using existing buildpack \"%s\"", bpDir)
+		minor.Printf("Using existing buildpack \"%s\"", bpDir)
 		git_exec(buildpackPath, "clean", "-fd")
 	}
 
@@ -193,7 +211,7 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 
 	releaseId := time.Now().Format("20060102150405")
 	releaseDir := fmt.Sprintf("%s/%s", ctx.releasePath, releaseId)
-	minor.Printf("Preparing for new release %s", releaseId)
+	minor.Printf("Preparing new release %s", releaseId)
 	if os.MkdirAll(releaseDir, 0770) != nil {
 		major.Printf("Couldn't create release dir %s", releaseDir)
 		return
@@ -203,5 +221,25 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 		major.Printf("Couldn't export HEAD to release dir")
 		return
 	}
+
+	compileCmd := exec.Command(fmt.Sprintf("%s/bin/compile", buildpackPath), releaseDir, ctx.cachePath)
+	compileCmd.Dir = ctx.cachePath
+	outReader, err := compileCmd.StdoutPipe()
+	if err != nil {
+		major.Println("Couldn't get stdout of compile script")
+		return
+	}
+
+	errReader, err := compileCmd.StderrPipe()
+	if err != nil {
+		major.Println("Couldn't get stderr of compile script")
+		return
+	}
+
+	go readToGitWriter(outReader, *gow)
+	go readToGitWriter(errReader, *gow)
+	compileCmd.Run()
+
+	major.Println("Done")
 
 }
