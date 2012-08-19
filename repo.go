@@ -1,31 +1,15 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
-	"launchpad.net/goyaml"
-	"log"
 	"net/http"
-	"net/http/cgi"
 	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
 	"time"
 )
-
-func createGitHandler(repoPath string) *cgi.Handler {
-	return &cgi.Handler{
-		Path: "/usr/local/Cellar/git/1.7.11.5/libexec/git-core/git-http-backend",
-		Env: []string{
-			fmt.Sprintf("GIT_PROJECT_ROOT=%s", repoPath),
-			"GIT_HTTP_EXPORT_ALL=true",
-		},
-	}
-}
 
 func git_exec(dir string, args ...string) (out []byte, err error) {
 	cmd := exec.Command("/usr/local/bin/git", args...)
@@ -46,68 +30,33 @@ func exists(path string) (bool, error) {
 }
 
 func (ctx requestContext) projRepoHandler(w http.ResponseWriter, req *http.Request) {
-	git := createGitHandler(ctx.repoPath)
+	git := CreateGitHandler(ctx.Project.Repo)
 
 	// test if repo exists
-	exists, err := exists(ctx.repoPath)
+	exists, err := exists(ctx.Project.Repo)
 	if err != nil {
 		http.Error(w, "Couldn't read project repo dir", http.StatusInternalServerError)
 		return
 	}
 
 	if !exists {
-		err := os.MkdirAll(ctx.repoPath, 0770)
+		err := os.MkdirAll(ctx.Project.Repo, 0770)
 		if err != nil {
 			http.Error(w, "Couldn't create project repo dir", http.StatusInternalServerError)
 			return
 		}
 
-		if _, err = git_exec(ctx.repoPath, "init", "--bare"); err != nil {
+		if _, err = git_exec(ctx.Project.Repo, "init", "--bare"); err != nil {
 			http.Error(w, "Couldn't init project repo", http.StatusInternalServerError)
 			return
 		}
-		if _, err = git_exec(ctx.repoPath, "config", "http.receivepack", "true"); err != nil {
+		if _, err = git_exec(ctx.Project.Repo, "config", "http.receivepack", "true"); err != nil {
 			http.Error(w, "Couldn't configure http.receivepack on project repo", http.StatusInternalServerError)
 			return
 		}
 	}
 
 	http.StripPrefix(fmt.Sprintf("/projects/%s/repo", ctx.vars["project"]), git).ServeHTTP(w, req)
-}
-
-type writerWrapper struct {
-	http.ResponseWriter
-}
-
-func (wrapper *writerWrapper) Write(data []byte) (int, error) {
-	if bytes.Equal(data, []byte("0000")) {
-		return 4, nil
-	}
-	return wrapper.ResponseWriter.Write(data)
-}
-
-type GitOutputWriter struct {
-	w http.ResponseWriter
-}
-
-func (gow *GitOutputWriter) Write(p []byte) (n int, err error) {
-	fmt.Fprintf(gow.w, "%04x\x02%s", len(p)+5, p)
-	if ok := gow.w.(http.Flusher); ok != nil {
-		ok.Flush()
-	}
-	return len(p), nil
-}
-
-func newHerokuStyleLogger(gow *GitOutputWriter, major bool) *log.Logger {
-	prefix := "       "
-	if major {
-		prefix = "-----> "
-	}
-	return log.New(gow, prefix, 0)
-}
-
-type config struct {
-	Buildpack string
 }
 
 func gitURL(path string) (*url.URL, error) {
@@ -126,43 +75,26 @@ func urlToDir(url *url.URL) (string, error) {
 	return "", errors.New("Couldn't parse repository name from URL")
 }
 
-func readToGitWriter(rc io.ReadCloser, gow GitOutputWriter) {
-	br := bufio.NewReader(rc)
-	for {
-		line, isPrefix, err := br.ReadLine()
-		if err != nil {
-			return
-		}
-
-		if !isPrefix {
-			line = append(line, "\n"...)
-		}
-
-		gow.Write(line)
-	}
-}
-
 func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req *http.Request) {
-	git := createGitHandler(ctx.repoPath)
+	git := CreateGitHandler(ctx.Project.Repo)
 
-	wrapper := &writerWrapper{w}
+	wrapper := &GitIgnoreFlushWriter{w}
 	http.StripPrefix(fmt.Sprintf("/projects/%s/repo", ctx.vars["project"]), git).ServeHTTP(wrapper, req)
 	defer fmt.Fprintln(w, "0000")
 
 	gow := &GitOutputWriter{w}
-	major := newHerokuStyleLogger(gow, true)
-	minor := newHerokuStyleLogger(gow, false)
+	major := NewHerokuStyleLogger(gow, true)
+	minor := NewHerokuStyleLogger(gow, false)
 	major.Println("Derploy receiving push")
 
-	yml, err := git_exec(ctx.repoPath, "cat-file", "blob", "master:.derploy.yml")
+	yml, err := git_exec(ctx.Project.Repo, "cat-file", "blob", "master:.derploy.yml")
 	if err != nil {
 		major.Println("Couldn't read derploy config")
 		minor.Println("Create .derploy.yml in the repository, containing \"buildpack: git@uri:for/buildpack\"")
 		return
 	}
 
-	c := config{}
-	err = goyaml.Unmarshal(yml, &c)
+	c, err := Parse(yml)
 	if err != nil {
 		major.Println("Couldn't parse deploy config")
 		return
@@ -196,7 +128,7 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 			return
 		}
 		minor.Println("Cleaning buildpack cache")
-		if os.RemoveAll(ctx.cachePath) != nil {
+		if os.RemoveAll(ctx.Project.Cache) != nil {
 			minor.Printf("Couldn't remove old cache, leaving in place")
 		}
 	} else {
@@ -204,26 +136,26 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 		git_exec(buildpackPath, "clean", "-fd")
 	}
 
-	if os.MkdirAll(ctx.cachePath, 0770) != nil {
+	if os.MkdirAll(ctx.Project.Cache, 0770) != nil {
 		major.Println("Couldn't create cache dir")
 		return
 	}
 
 	releaseId := time.Now().Format("20060102150405")
-	releaseDir := fmt.Sprintf("%s/%s", ctx.releasePath, releaseId)
+	releaseDir := fmt.Sprintf("%s/releases/%s", ctx.Project.Path, releaseId)
 	minor.Printf("Preparing new release %s", releaseId)
 	if os.MkdirAll(releaseDir, 0770) != nil {
 		major.Printf("Couldn't create release dir %s", releaseDir)
 		return
 	}
 
-	if _, err = git_exec(releaseDir, "clone", "--local", "--no-hardlinks", "--depth", "1", "--recursive", ctx.repoPath, "."); err != nil {
+	if _, err = git_exec(releaseDir, "clone", "--local", "--no-hardlinks", "--depth", "1", "--recursive", ctx.Project.Repo, "."); err != nil {
 		major.Printf("Couldn't export HEAD to release dir")
 		return
 	}
 
-	compileCmd := exec.Command(fmt.Sprintf("%s/bin/compile", buildpackPath), releaseDir, ctx.cachePath)
-	compileCmd.Dir = ctx.cachePath
+	compileCmd := exec.Command(fmt.Sprintf("%s/bin/compile", buildpackPath), releaseDir, ctx.Project.Cache)
+	compileCmd.Dir = ctx.Project.Cache
 	outReader, err := compileCmd.StdoutPipe()
 	if err != nil {
 		major.Println("Couldn't get stdout of compile script")
@@ -236,8 +168,8 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 		return
 	}
 
-	go readToGitWriter(outReader, *gow)
-	go readToGitWriter(errReader, *gow)
+	go PipeToGitWriter(outReader, *gow)
+	go PipeToGitWriter(errReader, *gow)
 	compileCmd.Run()
 
 	major.Println("Done")
