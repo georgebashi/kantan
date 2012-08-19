@@ -11,51 +11,65 @@ import (
 )
 
 type writerWrapper struct {
-	w http.ResponseWriter
-}
-
-func (wrapper *writerWrapper) Header() http.Header {
-	return wrapper.w.Header()
+	http.ResponseWriter
 }
 
 func (wrapper *writerWrapper) Write(data []byte) (int, error) {
 	if bytes.Equal(data, []byte("0000")) {
-		fmt.Println("IGNORE")
 		return 4, nil
 	}
-	return wrapper.w.Write(data)
+	return wrapper.ResponseWriter.Write(data)
 }
 
-func (wrapper *writerWrapper) WriteHeader(status int) {
-	fmt.Println("WRITEHEADER")
-	wrapper.w.WriteHeader(status)
+type globalContext struct {
+	derp_root string
 }
 
-func projRepoHandler(w http.ResponseWriter, req *http.Request, derp_root string) {
+type requestContext struct {
+	globalContext
+	vars map[string]string
+	projectPath string
+}
+
+type requestHandler struct {
+	globalContext
+	f func(requestContext, http.ResponseWriter, *http.Request)
+}
+
+func (handler *requestHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	vars := mux.Vars(req)
-	fmt.Println(req.RequestURI)
-	projectPath := fmt.Sprintf("%s/projects/%s", derp_root, vars["project"])
+	rCtx := requestContext{
+		globalContext: globalContext{
+			derp_root: handler.globalContext.derp_root,
+		},
+		vars: vars,
+		projectPath: fmt.Sprintf("%s/projects/%s", handler.globalContext.derp_root, vars["project"]),
+	}
+	handler.f(rCtx, w, req)
+}
+
+func (ctx requestContext) projRepoHandler(w http.ResponseWriter, req *http.Request) {
 	git := &cgi.Handler{
 		Path: "/usr/local/Cellar/git/1.7.11.5/libexec/git-core/git-http-backend",
 		Env: []string{
-			fmt.Sprintf("GIT_PROJECT_ROOT=%s", projectPath),
+			fmt.Sprintf("GIT_PROJECT_ROOT=%s", ctx.projectPath),
 			"GIT_HTTP_EXPORT_ALL=true",
 		},
 	}
 	// test if projectPath exists
-	if _, err := os.Stat(projectPath); err != nil {
+	if _, err := os.Stat(ctx.projectPath); err != nil {
 		if os.IsNotExist(err) {
 			// it doesn't, create it
-			os.MkdirAll(projectPath, 0770)
-			if git_exec(projectPath, "init") != nil {
+			os.MkdirAll(ctx.projectPath, 0770)
+			if git_exec(ctx.projectPath, "init") != nil {
 				http.Error(w, "Couldn't init project repo", http.StatusInternalServerError)
 				return
 			}
-			if git_exec(projectPath, "config", "http.receivepack", "true") != nil {
+			if git_exec(ctx.projectPath, "config", "http.receivepack", "true") != nil {
 				http.Error(w, "Couldn't configure http.receivepack on project repo", http.StatusInternalServerError)
 				return
 			}
-			if git_exec(projectPath, "config", "receive.denyCurrentBranch", "ignore") != nil {
+			if git_exec(ctx.projectPath, "config", "receive.denyCurrentBranch", "ignore") != nil {
 				http.Error(w, "Couldn't configure receive.denyCurrentBranch on project repo", http.StatusInternalServerError)
 				return
 			}
@@ -65,22 +79,19 @@ func projRepoHandler(w http.ResponseWriter, req *http.Request, derp_root string)
 			return
 		}
 	}
-	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", vars["project"]), git).ServeHTTP(w, req)
+	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", ctx.vars["project"]), git).ServeHTTP(w, req)
 }
 
-func projRepoReceivePackHandler(w http.ResponseWriter, req *http.Request, derp_root string) {
-	vars := mux.Vars(req)
-	fmt.Println("RECEIVE PACK")
-	projectPath := fmt.Sprintf("%s/projects/%s", derp_root, vars["project"])
+func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req *http.Request) {
 	git := &cgi.Handler{
 		Path: "/usr/local/Cellar/git/1.7.11.5/libexec/git-core/git-http-backend",
 		Env: []string{
-			fmt.Sprintf("GIT_PROJECT_ROOT=%s", projectPath),
+			fmt.Sprintf("GIT_PROJECT_ROOT=%s", ctx.projectPath),
 			"GIT_HTTP_EXPORT_ALL=true",
 		},
 	}
-	wrapper := &writerWrapper{w: w}
-	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", vars["project"]), git).ServeHTTP(wrapper, req)
+	wrapper := &writerWrapper{w}
+	http.StripPrefix(fmt.Sprintf("/proj/%s/repo", ctx.vars["project"]), git).ServeHTTP(wrapper, req)
 	printf(w, "herp a derp")
 	fmt.Fprintln(w, "0000")
 }
@@ -109,8 +120,10 @@ func main() {
 	}
 	r := mux.NewRouter()
 
-	r.Path("/proj/{project}/repo/git-receive-pack").HandlerFunc(func(w http.ResponseWriter, req *http.Request) { projRepoReceivePackHandler(w, req, derp_root) })
-	r.PathPrefix("/proj/{project}/repo").HandlerFunc(func(w http.ResponseWriter, req *http.Request) { projRepoHandler(w, req, derp_root) })
+	ctx := globalContext{derp_root}
+
+	r.Path("/proj/{project}/repo/git-receive-pack").Handler(&requestHandler{ctx, requestContext.projRepoReceivePackHandler})
+	r.PathPrefix("/proj/{project}/repo").Handler(&requestHandler{ctx, requestContext.projRepoHandler})
 
 	http.ListenAndServe(":9090", r)
 }
