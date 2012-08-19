@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"time"
 )
 
 func createGitHandler(repoPath string) *cgi.Handler {
@@ -187,6 +188,19 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 
 	if os.MkdirAll(ctx.cachePath, 0770) != nil {
 		major.Println("Couldn't create cache dir")
+		return
+	}
+
+	releaseId := time.Now().Format("20060102150405")
+	releaseDir := fmt.Sprintf("%s/%s", ctx.releasePath, releaseId)
+	minor.Printf("Preparing for new release %s", releaseId)
+	if os.MkdirAll(releaseDir, 0770) != nil {
+		major.Printf("Couldn't create release dir %s", releaseDir)
+		return
+	}
+
+	if _, err = git_exec(releaseDir, "clone", "--local", "--no-hardlinks", "--depth", "1", "--recursive", ctx.repoPath, "."); err != nil {
+		major.Printf("Couldn't export HEAD to release dir")
 		return
 	}
 
