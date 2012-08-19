@@ -185,6 +185,13 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 		}
 	} else {
 		major.Printf("Using existing buildpack \"%s\"", bpDir)
+		git_exec(buildpackPath, "clean", "-fd")
+	}
+
+	cacheDir := fmt.Sprintf("%s/cache/%s/%s", ctx.globalContext.derp_root, bpDir, ctx.vars["project"])
+	if os.MkdirAll(cacheDir, 0770) != nil {
+		major.Println("Couldn't create cache dir")
+		return
 	}
 
 	major.Println("Cleaning up")
