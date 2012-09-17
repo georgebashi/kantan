@@ -7,7 +7,7 @@ import (
 )
 
 type globalContext struct {
-	derp_root string
+	kantan_root string
 }
 
 type requestContext struct {
@@ -25,22 +25,22 @@ func (handler *requestHandler) ServeHTTP(w http.ResponseWriter, req *http.Reques
 	vars := mux.Vars(req)
 	rCtx := requestContext{
 		globalContext: globalContext{
-			derp_root: handler.globalContext.derp_root,
+			kantan_root: handler.globalContext.kantan_root,
 		},
 		vars:    vars,
-		Project: NewProject(handler.globalContext.derp_root, vars["project"]),
+		Project: NewProject(handler.globalContext.kantan_root, vars["project"]),
 	}
 	handler.f(rCtx, w, req)
 }
 
 func main() {
-	derp_root, _ := os.Getwd()
-	if env_derp_root := os.Getenv("DERP_ROOT"); env_derp_root != "" {
-		derp_root = env_derp_root
+	kantan_root, _ := os.Getwd()
+	if env_kantan_root := os.Getenv("KANTAN_ROOT"); env_kantan_root != "" {
+		kantan_root = env_kantan_root
 	}
 	r := mux.NewRouter()
 
-	ctx := globalContext{derp_root}
+	ctx := globalContext{kantan_root}
 
 	r.Path("/projects/{project}/repo/git-receive-pack").Handler(&requestHandler{ctx, requestContext.projRepoReceivePackHandler})
 	r.PathPrefix("/projects/{project}/repo").Handler(&requestHandler{ctx, requestContext.projRepoHandler})

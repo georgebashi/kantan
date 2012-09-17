@@ -86,12 +86,12 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 	gow := &GitOutputWriter{w}
 	major := NewHerokuStyleLogger(gow, true)
 	minor := NewHerokuStyleLogger(gow, false)
-	major.Println("Derploy receiving push")
+	major.Println("kantan receiving push")
 
-	yml, err := git_exec(ctx.Project.Repo, "cat-file", "blob", "master:.derploy.yml")
+	yml, err := git_exec(ctx.Project.Repo, "cat-file", "blob", "master:.kantan.yml")
 	if err != nil {
-		major.Println("Couldn't read derploy config")
-		minor.Println("Create .derploy.yml in the repository, containing \"buildpack: git@uri:for/buildpack\"")
+		major.Println("Couldn't read kantan config")
+		minor.Println("Create .kantan.yml in the repository, containing \"buildpack: git@uri:for/buildpack\"")
 		return
 	}
 
@@ -113,7 +113,7 @@ func (ctx requestContext) projRepoReceivePackHandler(w http.ResponseWriter, req 
 		return
 	}
 
-	buildpackPath := fmt.Sprintf("%s/buildpacks/%s", ctx.globalContext.derp_root, bpDir)
+	buildpackPath := fmt.Sprintf("%s/buildpacks/%s", ctx.globalContext.kantan_root, bpDir)
 
 	exists, err := exists(buildpackPath)
 	if err != nil {
